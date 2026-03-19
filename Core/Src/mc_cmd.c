@@ -11,12 +11,15 @@
 
 #define SM_IS_DIGIT(X) ((X) >= '0' && (X) <= '9')
 
+#define MC_SLAVE_ADDR 1UL
+
 typedef enum {
 	SM_IDLE = 0,
 	SM_READ_M, SM_READ_M_COLON,
 	SM_READ_D, SM_READ_D_COLON,
 	SM_READ_R, SM_READ_R_COLON,
 	SM_READ_S, SM_READ_S_D, SM_READ_S_D_COLON,
+	SM_READ_S_S, SM_READ_S_S_COLON,
 	SM_READ_ARG_DIGIT,
 	SM_CMD_READY
 } sm_state_t;
@@ -35,6 +38,8 @@ typedef struct {
 	sm_state_t cmd_sm_state;
 	cmd_handler_t sm_current_cmd;
 	uint32_t sm_integer_arg;
+
+	uint8_t is_slave_selected;
 } cmd_if_t;
 
 cmd_if_t command_if = {0};
@@ -46,6 +51,7 @@ const uint8_t cmd_nak_reply[] = {'N', 'A', 'K', '\n'};
 uint8_t status_report_reply[] = {'<', '0', '>', ' ', '0', ':', '[', '0', '0', '0', ']', '\n'};
 
 static void parse_command(uint8_t);
+void cmd_slave_select(void);
 void cmd_set_direction_cw(void);
 void cmd_set_direction_ccw(void);
 void cmd_set_duty_cycle(void);
@@ -131,6 +137,8 @@ static void parse_command(uint8_t c) {
 	case SM_READ_S:
 		if (c == 'd') {
 			command_if.cmd_sm_state = SM_READ_S_D;
+		} else if (c == 's') {
+			command_if.cmd_sm_state = SM_READ_S_S;
 		} else if (c == 'r') {
 			command_if.sm_current_cmd = cmd_report_status;
 			command_if.cmd_sm_state = SM_CMD_READY;
@@ -148,6 +156,22 @@ static void parse_command(uint8_t c) {
 	case SM_READ_S_D_COLON:
 		if (SM_IS_DIGIT(c)) {
 			command_if.sm_current_cmd = cmd_set_startup_dc;
+			command_if.sm_integer_arg = c - '0';
+			command_if.cmd_sm_state = SM_READ_ARG_DIGIT;
+		} else {
+			command_if.cmd_sm_state = SM_IDLE;
+		}
+		break;
+	case SM_READ_S_S:
+		if (c == ':') {
+			command_if.cmd_sm_state = SM_READ_S_S_COLON;
+		} else {
+			command_if.cmd_sm_state = SM_IDLE;
+		}
+		break;
+	case SM_READ_S_S_COLON:
+		if (SM_IS_DIGIT(c)) {
+			command_if.sm_current_cmd = cmd_slave_select;
 			command_if.sm_integer_arg = c - '0';
 			command_if.cmd_sm_state = SM_READ_ARG_DIGIT;
 		} else {
@@ -175,81 +199,108 @@ static void parse_command(uint8_t c) {
 }
 
 
-void cmd_set_direction_cw(void) {
-	// Confirm command
-	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+void cmd_slave_select(void) {
+	if (command_if.sm_integer_arg == MC_SLAVE_ADDR) {
+		// Confirm command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
 
-	mc_set_dir_cw();
+		command_if.is_slave_selected = 1;
+	} else {
+		// Another device on the bus is selected
+		command_if.is_slave_selected = 0;
+	}
+}
+
+
+void cmd_set_direction_cw(void) {
+	if (command_if.is_slave_selected) {
+		// Confirm command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
+		mc_set_dir_cw();
+	}
 }
 
 
 void cmd_set_direction_ccw(void) {
-	// Confirm command
-	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+	if (command_if.is_slave_selected) {
+		// Confirm command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
 
-	mc_set_dir_ccw();
+		mc_set_dir_ccw();
+	}
 }
 
 
 void cmd_set_duty_cycle(void) {
-	if (command_if.sm_integer_arg > 1000) {
-		// Reject command
-		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_nak_reply, sizeof cmd_nak_reply);
+	if (command_if.is_slave_selected) {
+		if (command_if.sm_integer_arg > 1000) {
+			// Reject command
+			HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_nak_reply, sizeof cmd_nak_reply);
 
-		return; //Value out of range
+			return; //Value out of range
+		}
+		// Confirm command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
+		uint16_t pulse_value = (MC_TIMER_ARR * command_if.sm_integer_arg) / 1000;
+		mc_set_run_pulse_value(pulse_value);
 	}
-	// Confirm command
-	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
-
-	uint16_t pulse_value = (MC_TIMER_ARR * command_if.sm_integer_arg) / 1000;
-	mc_set_run_pulse_value(pulse_value);
 }
 
 
 void cmd_turn_motor_on(void) {
-	// Confirm command
-	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+	if (command_if.is_slave_selected) {
+		// Confirm command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
 
-	mc_start_motor();
+		mc_start_motor();
+	}
 }
 
 
 void cmd_turn_motor_off(void) {
-	// Confirm command
-	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+	if (command_if.is_slave_selected) {
+		// Confirm command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
 
-	mc_stop_motor();
+		mc_stop_motor();
+	}
 }
 
 
 void cmd_report_status(void) {
-	// Note status
-	status_report_reply[1] = hmc.status + '0';
-	// Note current step
-	status_report_reply[4] = hmc.current_step + '0';
-	// Note current hall status
-	uint8_t hall_status = mc_get_hall_status();
-	status_report_reply[7] = hall_status & 0x04 ? '1' : '0';
-	status_report_reply[8] = hall_status & 0x02 ? '1' : '0';
-	status_report_reply[9] = hall_status & 0x01 ? '1' : '0';
+	if (command_if.is_slave_selected) {
+		// Note status
+		status_report_reply[1] = hmc.status + '0';
+		// Note current step
+		status_report_reply[4] = hmc.current_step + '0';
+		// Note current hall status
+		uint8_t hall_status = mc_get_hall_status();
+		status_report_reply[7] = hall_status & 0x04 ? '1' : '0';
+		status_report_reply[8] = hall_status & 0x02 ? '1' : '0';
+		status_report_reply[9] = hall_status & 0x01 ? '1' : '0';
 
-	// Reply to command
-	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)status_report_reply, sizeof status_report_reply);
+		// Reply to command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)status_report_reply, sizeof status_report_reply);
+	}
 }
 
 
 void cmd_set_startup_dc(void) {
-	if (command_if.sm_integer_arg > 1000) {
-		// Reject command
-		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_nak_reply, sizeof cmd_nak_reply);
+	if (command_if.is_slave_selected) {
+		if (command_if.sm_integer_arg > 1000) {
+			// Reject command
+			HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_nak_reply, sizeof cmd_nak_reply);
 
-		return; //Value out of range
+			return; //Value out of range
+		}
+		// Confirm command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
+		uint16_t pulse_value = (MC_TIMER_ARR * command_if.sm_integer_arg) / 1000;
+		mc_set_startup_pulse_value(pulse_value);
 	}
-	// Confirm command
-	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
-
-	uint16_t pulse_value = (MC_TIMER_ARR * command_if.sm_integer_arg) / 1000;
-	mc_set_startup_pulse_value(pulse_value);
 }
 
 
