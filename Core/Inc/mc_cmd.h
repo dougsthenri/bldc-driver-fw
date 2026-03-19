@@ -35,10 +35,10 @@
  * Set startup PWM duty cycle, where N is a value in tenths of percentage between 0 and 1000.
  *
  * sr
- * Report status: Current step number and hall sensor readings.
+ * Reply with status report: Current step number and hall sensor readings.
  *
- * Every command must be terminated by a newline character.
- * Unrecognised or malformed commands are ignored.
+ * Every command and response must be terminated by a newline character.
+ * Valid commands are answered with the "ACK" response and illegal ones with "NAK". Unrecognised commands are ignored.
  */
 
 #ifndef INC_MC_CMD_H_

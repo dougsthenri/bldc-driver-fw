@@ -39,6 +39,9 @@ typedef struct {
 
 cmd_if_t command_if = {0};
 
+const uint8_t cmd_ack_reply[] = {'A', 'C', 'K', '\n'};
+const uint8_t cmd_nak_reply[] = {'N', 'A', 'K', '\n'};
+
 // "<StatusNumber> StepNumber:[Hall1 Hall2 Hall3]"
 uint8_t status_report_reply[] = {'<', '0', '>', ' ', '0', ':', '[', '0', '0', '0', ']', '\n'};
 
@@ -173,30 +176,48 @@ static void parse_command(uint8_t c) {
 
 
 void cmd_set_direction_cw(void) {
+	// Confirm command
+	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
 	mc_set_dir_cw();
 }
 
 
 void cmd_set_direction_ccw(void) {
+	// Confirm command
+	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
 	mc_set_dir_ccw();
 }
 
 
 void cmd_set_duty_cycle(void) {
 	if (command_if.sm_integer_arg > 1000) {
+		// Reject command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_nak_reply, sizeof cmd_nak_reply);
+
 		return; //Value out of range
 	}
+	// Confirm command
+	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
 	uint16_t pulse_value = (MC_TIMER_ARR * command_if.sm_integer_arg) / 1000;
 	mc_set_run_pulse_value(pulse_value);
 }
 
 
 void cmd_turn_motor_on(void) {
+	// Confirm command
+	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
 	mc_start_motor();
 }
 
 
 void cmd_turn_motor_off(void) {
+	// Confirm command
+	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
 	mc_stop_motor();
 }
 
@@ -219,8 +240,14 @@ void cmd_report_status(void) {
 
 void cmd_set_startup_dc(void) {
 	if (command_if.sm_integer_arg > 1000) {
+		// Reject command
+		HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_nak_reply, sizeof cmd_nak_reply);
+
 		return; //Value out of range
 	}
+	// Confirm command
+	HAL_UART_Transmit_IT(command_if.huart, (const uint8_t *)cmd_ack_reply, sizeof cmd_ack_reply);
+
 	uint16_t pulse_value = (MC_TIMER_ARR * command_if.sm_integer_arg) / 1000;
 	mc_set_startup_pulse_value(pulse_value);
 }
